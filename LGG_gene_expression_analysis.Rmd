@@ -282,22 +282,27 @@ write.csv(pca_final_output, "lgg_pca_reduced_data.csv", row.names = FALSE)
 
 cat("Dimension reduced data has been saved successfully.\n")
 ```
+## Analytical Question
+
+### Assessing Whether Multinomial Logistic Regression Outperforms Random Assignment in Predicting Molecular Subtypes of Brain Lower-Grade Gliomas
+
 ```{r}
-# 按照指令要求，转换为 tibble 并打印前 10 行
+# --- Task 3: Principal Component Analysis (PCA) on Training Data ---
+# Compute PCs using training set features to avoid information leakage
 pca_train_tibble <- as_tibble(pca_res$x)
 print(head(pca_train_tibble, 10))
 ```
 ```{r}
-# Task 4: 使用 predict 函数将测试集投影到训练集的 PCA 空间
+# --- Task 4: Project Test Data onto Training PCA Space ---
+# Apply the rotation matrix learned from training data to the test set
 test_pca_scores <- predict(pca_res, newdata = test_data[, -1])
 
-# 转换为 tibble 并打印
 pca_test_tibble <- as_tibble(test_pca_scores)
 print(head(pca_test_tibble, 10))
 ```
 ```{r}
 # --- Task 6: Analyze Molecular Subtype Distribution ---
-# Check for class imbalance in both training and testing sets
+# Check for class imbalance in training data set
 train_counts <- table(train_data$SUBTYPE)
 test_counts <- table(test_data$SUBTYPE)
 
@@ -335,6 +340,7 @@ print(table(train_balanced$SUBTYPE))
 library(nnet)
 
 # Ensure SUBTYPE is a factor and set 'LGG_IDHwt' as the clinical reference level
+# Observe the biological differences between the other two subtypes (IDHmut) and this most dangerous subtype
 train_balanced$SUBTYPE <- as.factor(train_balanced$SUBTYPE)
 train_balanced$SUBTYPE <- relevel(train_balanced$SUBTYPE, ref = "LGG_IDHwt")
 
@@ -349,24 +355,23 @@ cat("\n--- Multinomial Model Summary ---\n")
 summary(model_lgg)
 ```
 ```{r}
-# --- Task 10 修正版：确保因子水平对齐 ---
+# --- Task 10: Ensure factor levels are aligned ---
 
-# 1. 获取测试集的真实标签
+# 1. Get the true labels from the test set
 actual_labels <- as.factor(test_data$SUBTYPE)
 
-# 2. 获取模型预测的标签
-# 关键：强制预测结果的 Levels 与真实标签的 Levels 完全一致
-test_pred_7 <- predict(model_lgg, newdata = test_pc_scores)
+# 2. Get the model's predicted labels
+# Key: Force the predicted factor levels to exactly match the true labels' levels
+test_pred_7 <- predict(model_lgg, newdata = pca_test_tibble)
 test_pred_7 <- factor(test_pred_7, levels = levels(actual_labels))
 
-# 3. 生成混淆矩阵 (行和列的顺序现在对齐了)
+# 3. Generate the confusion matrix
 conf_matrix_7 <- table(Predicted = test_pred_7, Actual = actual_labels)
 
 cat("--------------------- Confusion Matrix (7 PCs) ---------------------\n")
 print(conf_matrix_7)
 
-# 4. 重新计算错分率
-# diag() 现在能正确抓取 (A,A), (B,B), (C,C) 这种预测正确的格子
+# 4. Recalculate the misclassification rate
 accuracy <- sum(diag(conf_matrix_7)) / sum(conf_matrix_7)
 miss_rate_7 <- 1 - accuracy
 
