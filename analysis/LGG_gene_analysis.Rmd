@@ -382,7 +382,7 @@ ggplot(df_cm, aes(x = Actual, y = Predicted, fill = Freq)) +
 
 # Phase 7: Model Comparison (2-PC & 100-PC Models)
 
-To prove that the "7 PCs" chosen by the One-in-Ten rule is the optimal feature space, we compare its performance against an underfit model (2 PCs) and an overfit model (100 PCs).
+To prove that the "7 PCs" chosen by the One-in-Ten rule is the optimal feature space, we compare its performance against a 2 PCs model and a 100 PCs model.
 
 ## Training and Validating 2-PC Model
 
