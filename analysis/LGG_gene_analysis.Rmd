@@ -1,18 +1,49 @@
-```{r}
-file_path <- "../data/lgg-mrna-expression-data-with-cancer-subtypes.csv"
+---
+title: "Molecular Subtype Prediction of Brain Lower-Grade Gliomas"
+author: "Grace"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    theme: cosmo
+    highlight: tango
+---
 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# Phase 1: Environment Setup and Data Loading
+
+In this phase, we load the integrated dataset containing both the LGG molecular subtypes and high-throughput mRNA expression values. We also initialize the core libraries required for data manipulation, visualization, and machine learning.
+
+```{r}
+# Define data path and load dataset
+file_path <- "../data/LGG-mrna-expression-data-with-cancer-subtypes.csv"
 lgg_data <- read.csv(file_path)
 
+# Preview the first 10 rows
 head(lgg_data, 10)
 
+# Load required libraries
 library(dplyr)
 library(ggplot2)
 library(patchwork)
-
-
+library(caret)
+library(nnet)
 ```
 
+------------------------------------------------------------------------
+
+# Phase 2: Exploratory Data Analysis (EDA)
+
+Here, we explore the distribution of the cancer subtypes and examine the expression profile of a specific gene of interest, *ERBB2* (HER2), across different molecular groups.
+
+## Subtype Specific Summary Statistics
+
 ```{r}
+# Calculate summary statistics for ERBB2 expression grouped by subtype
 erbb2_summary <- lgg_data %>%
   group_by(SUBTYPE) %>%
   summarise(
@@ -26,7 +57,11 @@ erbb2_summary <- lgg_data %>%
 
 erbb2_summary
 ```
+
+## Visualizing Subtype Frequencies
+
 ```{r}
+# Bar plot to visualize the frequency of each LGG subtype
 ggplot(lgg_data, aes(x = SUBTYPE)) +
   geom_bar(fill = "#ffc238", width = 0.7) +
   geom_text(
@@ -45,8 +80,10 @@ ggplot(lgg_data, aes(x = SUBTYPE)) +
   )
 ```
 
+## Visualizing ERBB2 Expression Distribution
 
 ```{r}
+# Boxplot for ERBB2 expression by subtype
 ggplot(lgg_data, aes(x = SUBTYPE, y = ERBB2)) +
   geom_boxplot(fill = "#ffc238", width = 0.6, outlier.alpha = 0.4) +
   labs(
@@ -63,36 +100,37 @@ ggplot(lgg_data, aes(x = SUBTYPE, y = ERBB2)) +
     plot.margin = margin(20, 20, 20, 20)
   )
 ```
+
 ```{r}
+# Violin plot overlaid with boxplot for ERBB2 distribution
 ggplot(lgg_data, aes(x = SUBTYPE, y = ERBB2)) +
   geom_violin(fill = "lightyellow") +
-  geom_boxplot(width = 0.1, fill = "white")
+  geom_boxplot(width = 0.1, fill = "white") +
+  theme_minimal()
 ```
+
+## Statistical Testing: One-way ANOVA
 
 ```{r}
 # Perform One-way ANOVA to test if ERBB2 expression differs across subtypes
 anova_result <- aov(ERBB2 ~ SUBTYPE, data = lgg_data)
 
-# Display the ANOVA table to check for statistical significance (p-value)
+# Display the ANOVA table to check for statistical significance
 summary(anova_result)
 
 # Interpretation: There is a statistically significant difference in ERBB2 expression levels between at least two of the LGG tumor subtypes.
 ```
-```{r}
-ggplot(lgg_data, aes(x = ERBB2)) +
-  geom_histogram(bins = 30, fill = "steelblue", color = "white") +
-  labs(title = "Raw ERBB2 Expression")
-```
+
+------------------------------------------------------------------------
+
+# Phase 3: Data Transformation and Feature Selection
+
+High-throughput transcriptomic data often exhibit strong right-skewness and heteroscedasticity. Here, we evaluate different log transformations and filter out low-variance genes to optimize the feature space for modeling.
+
+## Evaluating Log Transformations
 
 ```{r}
-lgg_data$ERBB2_log2 <- log2(lgg_data$ERBB2 + 1)
-
-ggplot(lgg_data, aes(x = log2(ERBB2 + 1))) +
-  geom_histogram(bins = 30, fill = "darkorange", color = "white") +
-  labs(title = "Log2(ERBB2 + 1) Expression")
-```
-```{r}
-# Visualizing the Impact of Log Transformations
+# Visualizing the raw vs. transformed expression values
 lgg_comparison <- lgg_data %>%
   mutate(
     raw = ERBB2,
@@ -101,6 +139,7 @@ lgg_comparison <- lgg_data %>%
     log10_trans = log10(ERBB2 + 1)
   )
 
+# Define a function to plot histograms
 plot_hist <- function(data, col, title, color) {
   ggplot(data, aes(x = .data[[col]])) +  
     geom_histogram(bins = 30, fill = color, color = "white") +
@@ -108,28 +147,30 @@ plot_hist <- function(data, col, title, color) {
     theme_minimal()
 }
 
-
 p1 <- plot_hist(lgg_comparison, "raw", "Original (Raw) ERBB2", "gray")
 p2 <- plot_hist(lgg_comparison, "log2_trans", "log2(x + 1)", "steelblue")
 p3 <- plot_hist(lgg_comparison, "ln_trans", "ln(x + 1)", "darkgreen")
 p4 <- plot_hist(lgg_comparison, "log10_trans", "log10(x + 1)", "firebrick")
 
-
+# Combine plots using patchwork
 (p1 | p2) / (p3 | p4)
 ```
+
+## Applying Log2 Transformation Globally
 
 ```{r}
 # Identify all gene expression columns (excluding SUBTYPE)
 gene_cols <- sapply(lgg_data, is.numeric)
 gene_cols["SUBTYPE"] <- FALSE
 
-# Apply log2(x + 1) transformation
+# Apply log2(x + 1) transformation to stabilize variance
 lgg_data_log2 <- lgg_data
 lgg_data_log2[gene_cols] <- log2(lgg_data_log2[gene_cols] + 1)
 
-# Print first 10 rows and default number of columns
 head(lgg_data_log2, 10)
 ```
+
+## High-Variance Feature Selection
 
 ```{r}
 # Identify numeric gene columns in the log-transformed data
@@ -145,70 +186,58 @@ high_var_genes <- names(gene_vars[gene_vars > threshold])
 # Create filtered dataset
 lgg_data_filtered <- lgg_data_log2[, c("SUBTYPE", high_var_genes)]
 
-# Report dropping results and remaining counts
 genes_dropped <- length(gene_names) - length(high_var_genes)
 genes_remaining <- length(high_var_genes)
 
 cat("Summary of Variance Filtering:\n")
 cat("- Number of genes dropped (low variance):", genes_dropped, "\n")
 cat("- Number of genes remaining (high variance):", genes_remaining, "\n")
-
-# Display first 10 rows (limited columns for readability)
-head(lgg_data_filtered[, 1:5], 10)
 ```
-```{r}
-# 1. Identify all genes that were NOT kept (variance <= threshold)
-dropped_gene_names <- names(gene_vars[gene_vars <= threshold])
 
-# 2. Extract full data for ALL dropped genes (including SUBTYPE)
-# This creates a dataframe with all 6000+ dropped columns
+### Analysis of Dropped Genes
+
+```{r}
+# Extract full data for all dropped genes
+dropped_gene_names <- names(gene_vars[gene_vars <= threshold])
 lgg_data_dropped_full <- lgg_data_log2[, c("SUBTYPE", dropped_gene_names)]
 
-# 3. Accessing the data:
-# To see the full list in RStudio, use: View(lgg_data_dropped_full)
-cat("Full dataset of dropped genes created with", length(dropped_gene_names), "columns.\n")
-```
-
-```{r}
-# 1. Create a summary table of the dropped genes and their variances
+# Create a summary table of the dropped genes and their variances
 dropped_summary <- data.frame(
   Gene = dropped_gene_names,
   Variance = gene_vars[dropped_gene_names]
 )
 
-# 2. Show the Top 10 genes with the absolute lowest variance
 cat("\n--- Top 10 Genes with the Lowest Variance (Most Stable) ---\n")
-# Sorting by variance in ascending order
 top_10_low_var <- dropped_summary[order(dropped_summary$Variance), ]
 print(head(top_10_low_var, 10))
 
-# 3. Calculate and show the Variance Range of all dropped genes
+# Calculate and show the Variance Range of all dropped genes
 var_range <- range(dropped_summary$Variance)
 cat("\n--- Variance Range of All Dropped Genes ---\n")
 cat("Minimum Variance:", var_range[1], "\n")
 cat("Maximum Variance (at 20% threshold):", var_range[2], "\n")
 ```
+
+## Z-Score Standardization
+
 ```{r}
-# Standardize only the remaining high-variance genes
+# Standardize only the remaining high-variance genes to ensure equal feature weight
 num_cols_final <- sapply(lgg_data_filtered, is.numeric)
 lgg_data_std <- lgg_data_filtered
 lgg_data_std[, num_cols_final] <- scale(lgg_data_std[, num_cols_final])
 
-# Display finalized preprocessed data
-head(lgg_data_std[, 1:5], 10)
-```
-
-```{r}
-# Task 8: Save preprocessed and filtered data
+# Save preprocessed and filtered data for future use
 write.csv(lgg_data_filtered, "../data/lgg_mrna_preprocessed_highvar.csv", row.names = FALSE)
-
 cat("Preprocessed data saved to lgg_mrna_preprocessed_highvar.csv\n")
 ```
+
+------------------------------------------------------------------------
+
+# Phase 4: Model Preparation - Data Splitting
+
+We split our standardized data into independent training and testing sets to prevent data leakage and evaluate our model's generalizability fairly.
+
 ```{r}
-# Task 9 Training & Testing Split
-
-
-# set randon seed
 set.seed(2026)
 
 # Calculate the number of training samples (80%)
@@ -218,25 +247,27 @@ train_idx <- sample(1:nrow(lgg_data_std), 0.8 * nrow(lgg_data_std))
 train_data <- lgg_data_std[train_idx, ]
 test_data  <- lgg_data_std[-train_idx, ]
 
-# Verify the split
 cat("Training set size:", nrow(train_data), "\n")
 cat("Testing set size:", nrow(test_data), "\n")
-
 ```
-```{r}
-# Run PCA
-# PCA can condense the differences of thousands of genes into several major "components" (PC1, PC2... ) 。 We plotted the scatter plot of the first two principal components and colored them according to the tumor subtypes (SUBTYPE) to see if the different tumors could be clearly separated after dimensionality reduction.
 
-# 1. Run PCA on numeric columns of the training data
-# We exclude the first column 'SUBTYPE' from the calculation
+------------------------------------------------------------------------
+
+# Phase 5: Dimensionality Reduction via PCA
+
+To combat the "curse of dimensionality" from thousands of genes, we apply Principal Component Analysis (PCA) to condense data variance into key components.
+
+## Running PCA
+
+```{r}
+# Run PCA on numeric columns of the training data
 pca_res <- prcomp(train_data[, -1], center = FALSE, scale. = FALSE) 
 
-# 2. Extract PC scores for plotting
+# Extract PC scores for plotting
 pca_df <- as.data.frame(pca_res$x)
 pca_df$SUBTYPE <- train_data$SUBTYPE
 
-# 3. Plot PC1 vs PC2
-library(ggplot2)
+# Plot PC1 vs PC2
 ggplot(pca_df, aes(x = PC1, y = PC2, color = SUBTYPE, fill = SUBTYPE)) +
   geom_point(alpha = 0.6, size = 2) +
   stat_ellipse(level = 0.95, geom = "polygon", alpha = 0.2, color = NA) +
@@ -244,14 +275,11 @@ ggplot(pca_df, aes(x = PC1, y = PC2, color = SUBTYPE, fill = SUBTYPE)) +
   labs(title = "PCA of LGG mRNA Expression (Training Set)",
        x = "Principal Component 1",
        y = "Principal Component 2")
-
-
 ```
 
+## Scree Plot Analysis
 
 ```{r}
-# Task 11 Scree Plot
-
 # Calculate variance explained by each principal component
 prop_var <- (pca_res$sdev^2) / sum(pca_res$sdev^2)
 
@@ -266,68 +294,41 @@ ggplot(scree_df, aes(x = PC, y = Variance)) +
   theme_minimal() +
   labs(title = "Scree Plot of First 25 Principal Components",
        x = "Principal Component", y = "Proportion of Variance Explained")
-```
 
-```{r}
-# Calculate cumulative variance explained by the first 25 PCs
 cum_var_25 <- sum(prop_var[1:25])
 cat("Total variance explained by the first 25 PCs:", round(cum_var_25 * 100, 2), "%\n")
 ```
-```{r}
-# Combine SUBTYPE with the PC scores
-pca_final_output <- cbind(SUBTYPE = train_data$SUBTYPE, as.data.frame(pca_res$x))
 
-# Write the dimension-reduced data (PC scores) to CSV
-write.csv(pca_final_output, "lgg_pca_reduced_data.csv", row.names = FALSE)
+------------------------------------------------------------------------
 
-cat("Dimension reduced data has been saved successfully.\n")
-```
-## Analytical Question
+# Phase 6: Addressing Class Imbalance & Model Training
 
-### Assessing Whether Multinomial Logistic Regression Outperforms Random Assignment in Predicting Molecular Subtypes of Brain Lower-Grade Gliomas
+We project test data onto the training PCA space, address the class imbalance via up-sampling based on the "One in Ten Rule", and train our primary 7-PC Multinomial Logistic Regression model.
+
+## Projecting Test Data
 
 ```{r}
-# --- Task 3: Principal Component Analysis (PCA) on Training Data ---
-# Compute PCs using training set features to avoid information leakage
-pca_train_tibble <- as_tibble(pca_res$x)
-print(head(pca_train_tibble, 10))
-```
-```{r}
-# --- Task 4: Project Test Data onto Training PCA Space ---
-# Apply the rotation matrix learned from training data to the test set
+# Project Test Data onto Training PCA Space
 test_pca_scores <- predict(pca_res, newdata = test_data[, -1])
-
-pca_test_tibble <- as_tibble(test_pca_scores)
-print(head(pca_test_tibble, 10))
+pca_test_tibble <- tibble::as_tibble(test_pca_scores)
 ```
-```{r}
-# --- Task 6: Analyze Molecular Subtype Distribution ---
-# Check for class imbalance in training data set
-train_counts <- table(train_data$SUBTYPE)
-test_counts <- table(test_data$SUBTYPE)
 
+## Class Distribution and Up-sampling
+
+```{r}
+train_counts <- table(train_data$SUBTYPE)
 cat("--- Original Training Counts ---\n")
 print(train_counts)
-```
- ---------------------------------------------------------------
- --- Task 8: Recommendation based on 'One in Ten Rule' ---
- Justification: The smallest class (LGG_IDHwt) has 73 samples. 
- 73 / 10 = 7.3, supporting the use of 7 Principal Components.
- ---------------------------------------------------------------
 
-```{r}
-# --- Task 7: Address Class Imbalance via Up-sampling ---
-library(caret)
-set.seed(2026)
-
-# Select top X PCs based on the 'One in Ten' rule determined in Task 8
+# Apply 'One in Ten Rule': Smallest class has 73 samples. 73 / 10 = 7.3 features allowed.
 X_features <- 7
 pc_names <- paste0("PC", 1:X_features)
 
-# Integrate SUBTYPE labels with PCA scores for the training set
+# Integrate SUBTYPE labels with PCA scores
 train_pca_data <- cbind(SUBTYPE = train_data$SUBTYPE, as.data.frame(pca_res$x[, 1:X_features]))
 
 # Perform up-sampling to balance the classes
+set.seed(2026)
 train_balanced <- upSample(x = train_pca_data[, pc_names], 
                            y = as.factor(train_pca_data$SUBTYPE), 
                            yname = "SUBTYPE")
@@ -335,105 +336,159 @@ train_balanced <- upSample(x = train_pca_data[, pc_names],
 cat("\n--- Balanced Training Counts (Up-sampled) ---\n")
 print(table(train_balanced$SUBTYPE))
 ```
-```{r}
-# --- Task 9: Fit Multinomial Logistic Regression Model ---
-library(nnet)
 
-# Ensure SUBTYPE is a factor and set 'LGG_IDHwt' as the clinical reference level
-# Observe the biological differences between the other two subtypes (IDHmut) and this most dangerous subtype
+## Fitting the 7-PC Model
+
+```{r}
+# Set 'LGG_IDHwt' as the clinical reference level (most aggressive subtype)
 train_balanced$SUBTYPE <- as.factor(train_balanced$SUBTYPE)
 train_balanced$SUBTYPE <- relevel(train_balanced$SUBTYPE, ref = "LGG_IDHwt")
 
-# Define the model formula
 model_formula <- as.formula(paste("SUBTYPE ~", paste(pc_names, collapse = " + ")))
 
-# Fit the model using the balanced training data
+# Fit model
 model_lgg <- multinom(model_formula, data = train_balanced, trace = FALSE)
 
-# Display model parameters and fit statistics
 cat("\n--- Multinomial Model Summary ---\n")
 summary(model_lgg)
 ```
-```{r}
-# --- Task 10: Ensure factor levels are aligned ---
 
-# 1. Get the true labels from the test set
+## Evaluating the 7-PC Model
+
+```{r}
 actual_labels <- as.factor(test_data$SUBTYPE)
 
-# 2. Get the model's predicted labels
-# Key: Force the predicted factor levels to exactly match the true labels' levels
 test_pred_7 <- predict(model_lgg, newdata = pca_test_tibble)
 test_pred_7 <- factor(test_pred_7, levels = levels(actual_labels))
 
-# 3. Generate the confusion matrix
 conf_matrix_7 <- table(Predicted = test_pred_7, Actual = actual_labels)
-
-cat("--------------------- Confusion Matrix (7 PCs) ---------------------\n")
-print(conf_matrix_7)
-
-# 4. Recalculate the misclassification rate
 accuracy <- sum(diag(conf_matrix_7)) / sum(conf_matrix_7)
 miss_rate_7 <- 1 - accuracy
 
-cat("\n Misclassification Rate (7 PCs):", round(miss_rate_7, 4), "\n")
+# Plot Confusion Matrix Heatmap
+df_cm <- as.data.frame(conf_matrix_7)
+ggplot(df_cm, aes(x = Actual, y = Predicted, fill = Freq)) +
+  geom_tile() +
+  geom_text(aes(label = Freq), vjust = 1) +
+  scale_fill_gradient(low = "white", high = "#2c7fb8") +
+  theme_minimal() +
+  labs(title = "Confusion Matrix: 7-PC Multinomial Model",
+       subtitle = paste("Misclassification Rate:", round(miss_rate_7, 4)),
+       x = "True Molecular Subtype",
+       y = "Predicted Subtype")
 ```
-```{r}
-# --- Task 11: Training and Validating 2-PC Model ---
 
-# 1. Define feature set (PC1, PC2)
+------------------------------------------------------------------------
+
+# Phase 7: Model Comparison (2-PC & 100-PC Models)
+
+To prove that the "7 PCs" chosen by the One-in-Ten rule is the optimal feature space, we compare its performance against an underfit model (2 PCs) and an overfit model (100 PCs).
+
+## Training and Validating 2-PC Model
+
+```{r}
 X2 <- 2
 pc_names_2 <- paste0("PC", 1:X2)
 
-# 2. Fit the model using the balanced training data (already created in Task 7)
 formula_2 <- as.formula(paste("SUBTYPE ~", paste(pc_names_2, collapse = " + ")))
 model_2pc <- multinom(formula_2, data = train_balanced, trace = FALSE)
 
-# 3. Project Test Data (only first 2 PCs)
 test_pc_2 <- as.data.frame(predict(pca_res, newdata = test_data[, -1])[, 1:X2])
-
-# 4. Predict and Align Levels
 pred_2pc <- predict(model_2pc, newdata = test_pc_2)
 pred_2pc <- factor(pred_2pc, levels = levels(as.factor(test_data$SUBTYPE)))
 
-# 5. Calculate Misclassification Rate
 conf_matrix_2 <- table(Predicted = pred_2pc, Actual = test_data$SUBTYPE)
 miss_rate_2 <- 1 - sum(diag(conf_matrix_2)) / sum(conf_matrix_2)
 
-cat("--- Task 11 Result ---\n")
 cat("Misclassification Rate (2 PCs):", round(miss_rate_2, 4), "\n")
 ```
-```{r}
-# --- Task 12: Training and Validating 100-PC Model ---
 
-# 1. Prepare Training Data with 100 PCs
+### Visualizing 2-PC Decision Boundaries
+
+```{r}
+# Define uniform color mapping for consistency
+my_colors <- c(
+  "LGG_IDHmut-codel" = "#F8766D",     
+  "LGG_IDHmut-non-codel" = "#00BA38", 
+  "LGG_IDHwt" = "#619CFF"            
+)
+
+# Create prediction grid for decision boundaries
+grid <- expand.grid(
+  PC1 = seq(min(pca_df$PC1), max(pca_df$PC1), length.out = 100),
+  PC2 = seq(min(pca_df$PC2), max(pca_df$PC2), length.out = 100)
+)
+grid$SUBTYPE <- predict(model_2pc, newdata = grid)
+
+test_points <- as.data.frame(cbind(test_pc_2, SUBTYPE = test_data$SUBTYPE))
+
+ggplot() +
+  geom_tile(data = grid, aes(x = PC1, y = PC2, fill = SUBTYPE), alpha = 0.3) +
+  scale_fill_manual(values = my_colors) +
+  geom_point(data = test_points, aes(x = PC1, y = PC2, color = SUBTYPE), size = 2) +
+  scale_color_manual(values = my_colors) +
+  theme_minimal() +
+  guides(
+    fill = guide_legend(title = "Predicted Subtype\n(Decision Boundary)"),
+    color = guide_legend(title = "Actual Subtype\n(Test Set Points)")
+  ) +
+  labs(title = "Decision Boundaries of 2-PC Model",
+       subtitle = paste("Misclassification Rate:", round(miss_rate_2, 4)),
+       x = "Principal Component 1",
+       y = "Principal Component 2")
+```
+
+## Training and Validating 100-PC Model
+
+```{r}
 X100 <- 100
 pc_names_100 <- paste0("PC", 1:X100)
-train_pca_100 <- cbind(SUBTYPE = train_data$SUBTYPE, 
-                       as.data.frame(pca_res$x[, 1:X100]))
+train_pca_100 <- cbind(SUBTYPE = train_data$SUBTYPE, as.data.frame(pca_res$x[, 1:X100]))
 
-# 2. Re-balance (upSample) for 100 features
+# Re-balance for 100 features
 set.seed(2026)
 train_bal_100 <- upSample(x = train_pca_100[, pc_names_100], 
                           y = as.factor(train_pca_100$SUBTYPE), 
                           yname = "SUBTYPE")
 
-# 3. Fit the model
 formula_100 <- as.formula(paste("SUBTYPE ~", paste(pc_names_100, collapse = " + ")))
 model_100pc <- multinom(formula_100, data = train_bal_100, trace = FALSE)
 
-# 4. Project Test Data (first 100 PCs)
 test_pc_100 <- as.data.frame(predict(pca_res, newdata = test_data[, -1])[, 1:X100])
-
-# 5. Predict and Align Levels
 pred_100pc <- predict(model_100pc, newdata = test_pc_100)
 pred_100pc <- factor(pred_100pc, levels = levels(as.factor(test_data$SUBTYPE)))
 
-# 6. Calculate Misclassification Rate
 conf_matrix_100 <- table(Predicted = pred_100pc, Actual = test_data$SUBTYPE)
 miss_rate_100 <- 1 - sum(diag(conf_matrix_100)) / sum(conf_matrix_100)
 
-cat("--- Task 12 Result ---\n")
 cat("Misclassification Rate (100 PCs):", round(miss_rate_100, 4), "\n")
 ```
 
+------------------------------------------------------------------------
 
+# Phase 8: Final Model Evaluation and Comparison
+
+Finally, we aggregate the performance across the three tested models to evaluate the effectiveness of dimensionality reduction under the "One in Ten" rule.
+
+```{r}
+performance_df <- data.frame(
+  Num_PCs = c(2, 7, 100),
+  Model_Name = c("2-PC Model", "7-PC Model", "100-PC Model"),
+  Misclassification_Rate = c(miss_rate_2, miss_rate_7, miss_rate_100)
+)
+
+performance_df$Model_Name <- factor(performance_df$Model_Name, 
+                                    levels = c("2-PC Model", "7-PC Model", "100-PC Model"))
+
+# Plot performance comparison
+ggplot(performance_df, aes(x = Model_Name, y = Misclassification_Rate, fill = Model_Name)) +
+  geom_bar(stat = "identity", width = 0.6, show.legend = FALSE) +
+  geom_text(aes(label = round(Misclassification_Rate, 4)), vjust = -0.5, size = 5) +
+  scale_fill_brewer(palette = "Set2") +
+  theme_minimal() +
+  labs(title = "Comparison of Misclassification Rates across Models",
+       subtitle = "Comparing performance with 2, 7, and 100 Principal Components",
+       x = "Model Complexity (Number of PCs)",
+       y = "Misclassification Rate (Lower is Better)") +
+  ylim(0, max(performance_df$Misclassification_Rate) * 1.2)
+```
